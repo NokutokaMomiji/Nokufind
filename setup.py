@@ -1,9 +1,15 @@
 from setuptools import find_packages, setup
 
+with open("README.md", "r", encoding = "utf-8") as file:
+    long_description = file.read()
+
+with open("LICENSE", "r", encoding = "utf-8") as file:
+    license_text = file.read()
+
 setup(
     name = "nokufind",
     packages = find_packages(),
-    version = "1.0.0",
+    version = "1.0.2",
     description = "A library that allows you to find posts from multiple Boorus and sources.",
     author = "Nokutoka Momiji (@NokutokaMomiji)",
     install_requires = [
@@ -23,5 +29,9 @@ setup(
     ],
     setup_requires = ["pytest-runner"],
     tests_require = ["pytest==4.4.1"],
-    test_suite = "tests"
+    test_suite = "tests",
+    long_description = long_description,
+    long_description_content_type = "text/markdown",
+    url = "https://github.com/NokutokaMomiji/Nokufind",
+    license = license_text
 )

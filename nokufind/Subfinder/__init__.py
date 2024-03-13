@@ -15,5 +15,6 @@ builtin_finders = [
     YandereFinder,
     GelbooruFinder,
     PixivFinder,
-    ManganatoFinder
+    ManganatoFinder,
+    NHentaiFinder
 ]
