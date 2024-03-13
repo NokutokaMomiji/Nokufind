@@ -3,9 +3,11 @@ Nokufind
 </h1>
 
 <center>
+
 [![GitHub forks](https://img.shields.io/github/forks/NokutokaMomiji/Nokufind)](https://github.com/NokutokaMomiji/Nokufind)
 [![GitHub stars](https://img.shields.io/github/stars/NokutokaMomiji/Nokufind)](https://github.com/NokutokaMomiji/Nokufind)
 [![GitHub issues](https://img.shields.io/github/issues/NokutokaMomiji/Nokufind)](https://github.com/NokutokaMomiji/Nokufind/issues)
+
 </center>
 
 Nokufind is a Python library that allows you to find posts from multiple Boorus and sources. It also allows you to create custom wrappers around other finders and API modules.
