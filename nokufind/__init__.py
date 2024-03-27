@@ -10,7 +10,7 @@ __title__ = "nokufind"
 __author__ = "Nokutoka Momiji"
 __license__ = "MIT"
 __copyright__ = "Copyright (C) 2024 Nokutoka Momiji"
-__version__ = "1.0.2"
+__version__ = "1.0.4"
 
 __path__ = __import__("pkgutil").extend_path(__path__, __name__)
 

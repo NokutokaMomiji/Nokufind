@@ -172,6 +172,16 @@ class GelbooruFinder(ISubfinder):
         posts = self._get_all_posts(tags = tags, limit = limit, page = page)
 
         return posts
+    
+    async def search_posts_async(self, tags: str | list[str], *, limit: int = 100, page: int | None = None) -> list[Post]:
+        self._check_client()
+
+        if (type(tags) == str):
+            tags = tags.split(" ")
+
+        posts = await self._get_all_posts_async(tags = tags, limit = limit, page = page)
+
+        return posts
 
     def get_post(self, post_id: int) -> Post | None:
         self._check_client()
@@ -182,7 +192,7 @@ class GelbooruFinder(ISubfinder):
 
         return GelbooruFinder.to_post(post) if post else None
     
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         self._check_client()
 
         if post_id != None:
@@ -195,7 +205,7 @@ class GelbooruFinder(ISubfinder):
                 log(f"> [{self.__name}]: Getting comments from post failed. This is probably due to Gelbooru having disabled their comment API due to abuse.\n{e}")
                 return []
         
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         comment_id = assert_conversion(comment_id, int, "comment_id")
@@ -255,6 +265,35 @@ class GelbooruFinder(ISubfinder):
         
         while (current_size == 100):
             raw_posts = asyncio.run(self.__client.search_posts(tags = tags, limit = 100, page = current_page))
+            current_size = len(raw_posts)
+
+            if (type(raw_posts) == list):
+                raw_posts = _filter_invalid_posts(raw_posts)
+                posts = [GelbooruFinder.to_post(post) for post in raw_posts]
+            elif _post_is_valid(raw_posts):
+                posts = [GelbooruFinder.to_post(raw_posts)]
+                
+            current_posts += posts
+
+            if len(current_posts) >= limit:
+                break
+
+            current_page += 1
+
+        current_posts = list(sorted(current_posts, key = lambda x: x.post_id))
+
+        if len(current_posts) > limit:
+            return current_posts[:limit]
+        
+        return current_posts
+    
+    async def _get_all_posts_async(self, tags: str, limit: int = 100, page: int | None = None) -> list[Post]:
+        current_posts = []
+        current_size = 100
+        current_page = page if type(page) == int else 1
+        
+        while (current_size == 100):
+            raw_posts = await self.__client.search_posts(tags = tags, limit = 100, page = current_page)
             current_size = len(raw_posts)
 
             if (type(raw_posts) == list):

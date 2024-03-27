@@ -1,6 +1,14 @@
 import requests
+import io
+from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 from math import ceil
+
+try:
+    from PIL import Image, ImageSequence
+    has_pil = True
+except:
+    has_pil = False
 
 _cookies = {
     "cf_clearance": "4PtNZd5PGSDKDBXhASc1z_mC.tKc.ggMrvxhx2s3GdE-1709327262-1.0.1.1-azAPC335pQo4d9v.0TqPligg5htX.RtlAn36lYJx1Vc9IHvYDWrWjSBCaxciXtfGeawADZZ9MDQG2c7iXT27vA"
@@ -13,7 +21,7 @@ _headers = {
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 OPR/107.0.0.0"
 PIXIV_REFERER = "https://app-api.pixiv.net/"
 
-should_log = False
+should_log = True
 
 def make_request(url: str, params = None, *, post: bool = False, cookies = _cookies, headers = _headers, stream: bool = False):
     request_function = requests.get if not post else requests.post
@@ -121,3 +129,34 @@ def split(list_ref, num_of_splits):
 
     return split_lists
 
+def zip_to_gif(zip_file: str | bytes) -> bytes | None:
+    if not has_pil:
+        log("> [nokufind.Utils]: No PIL module found.")
+        return None
+
+    image_files = []
+    
+    if type(zip_file) == bytes:
+        zip_file = io.BytesIO(zip_file)
+    elif type(zip_file) != str:
+        raise ValueError(f"'zip_file' should be a path or a bytes object, not {type(zip_file)}")
+
+
+    with ZipFile(zip_file, "r") as zip_ref:
+        for file_info in zip_ref.infolist():
+            if file_info.filename.endswith(('.jpg', '.jpeg', '.png')):
+                image_files.append(zip_ref.read(file_info.filename))
+
+    if not image_files:
+        raise ValueError("No image files found in the ZIP archive.")
+
+    gif_frames = []
+    for img_data in image_files:
+        img = Image.open(io.BytesIO(img_data))
+        gif_frames.extend(list(ImageSequence.Iterator(img)))
+
+    with io.BytesIO() as gif_buffer:
+        gif_frames[0].save(gif_buffer, save_all=True, append_images=gif_frames[1:], format='GIF', loop = 0)
+        gif_data = gif_buffer.getvalue()
+
+    return gif_data

@@ -9,7 +9,7 @@ with open("LICENSE", "r", encoding = "utf-8") as file:
 setup(
     name = "nokufind",
     packages = find_packages(),
-    version = "1.0.2",
+    version = "1.0.4",
     description = "A library that allows you to find posts from multiple Boorus and sources.",
     author = "Nokutoka Momiji (@NokutokaMomiji)",
     install_requires = [

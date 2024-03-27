@@ -121,10 +121,10 @@ class ManganatoFinder(ISubfinder):
 
         return ManganatoFinder.to_post(post)._set_headers(self.configuration.headers) if post != None else None
 
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         return []
     
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         return None
     
     def get_notes(self, post_id: int) -> list[Note]:

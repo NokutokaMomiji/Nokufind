@@ -240,7 +240,7 @@ class DanbooruFinder(ISubfinder):
 
         return [DanbooruFinder.to_comment(comment) for comment in raw_comments if comment != None]
     
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         comment_id = attempt_conversion(comment_id, int)

@@ -8,7 +8,7 @@ import markdownify
 class Comment():
     """A wrapper around comment data from multiple sources."""
 
-    def __init__(self, *, comment_id: int, post_id: int, creator_id: int, creator: str, body: str, source: str, created_at: datetime):
+    def __init__(self, *, comment_id: int, post_id: int, creator_id: int, creator: str, creator_avatar: str | None = None, body: str, source: str, created_at: datetime):
         """Creates a new Comment object.
 
         If you are using any of the built-in Finders, you can use the to_post() static methods to automatically generate a Comment object
@@ -19,6 +19,7 @@ class Comment():
             post_id (``int``): The ID of the post where the comment is located.
             creator_id (``int``): The ID of the creator of the comment.
             creator (``str``): The name of the creator of the comment.
+            creator_avatar (``str``): The URL to the image of the creator's avatar, or None if there is none.
             body (``str``): The content of the comment.
             source (``str``): A string representing the source from where the comment data came from. (Ex: "danbooru", "konachan", etc...)
             created_at (``datetime``): A datetime object containing the date information. This will be transformed into a UTC timestamp.
@@ -29,6 +30,7 @@ class Comment():
         self.__comment_data["post_id"] = post_id
         self.__comment_data["creator_id"] = creator_id
         self.__comment_data["creator"] = creator
+        self.__comment_data["creator_avatar"] = creator_avatar
         self.__comment_data["body"] = body
         self.__comment_data["source"] = source
         self.__comment_data["created_at"] = timegm(created_at.utctimetuple())

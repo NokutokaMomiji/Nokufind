@@ -36,7 +36,7 @@ class Rule34Finder(ISubfinder):
         return Post(
             post_id = post_data.id,
             tags = post_data.tags,
-            sources = [post_data.source.split(" ")], #post_data.source.split(" "),
+            sources = post_data.source.split(" "), #post_data.source.split(" "),
             images = [post_data.content],
             authors = [""],
             source = "rule34",
@@ -157,7 +157,7 @@ class Rule34Finder(ISubfinder):
 
         return Rule34Finder.to_post(raw_post) if type(raw_post) == r34Post else None
     
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         self._check_client()
         
         raw_comments = None
@@ -171,7 +171,7 @@ class Rule34Finder(ISubfinder):
         raw_comments = self.__client.get_comments(post_id)
         return [Rule34Finder.to_comment(post) for post in raw_comments]
     
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         comment_id = assert_conversion(comment_id, int, "comment_id")

@@ -6,7 +6,7 @@ from timeloop import Timeloop
 
 from nokufind import Post, Comment, Note
 from nokufind.Subfinder import ISubfinder, SubfinderConfiguration
-from nokufind.Utils import PIXIV_REFERER, get, make_request, assert_conversion
+from nokufind.Utils import PIXIV_REFERER, get, make_request, assert_conversion, USER_AGENT
 from nokufind.Utils.PixivAuth import login, refresh
 
 PIXIV_AUTH_MESSAGE = """
@@ -69,6 +69,9 @@ class PixivFinder(ISubfinder):
         self.__config = SubfinderConfiguration()
         self.__config._set_property("api_key", refresh_key)
 
+        self.__config.set_header("User-Agent", USER_AGENT)
+        self.__config.set_header("Referer", PIXIV_REFERER)
+
     def search_posts(self, tags: str | list[str], *, limit: int = 100, page: int | None = None) -> list[Post]:
         self._check_client()
 
@@ -82,9 +85,9 @@ class PixivFinder(ISubfinder):
 
         raw_post = self.__client.illust_detail(post_id)
 
-        return PixivFinder.to_post(raw_post) if not "error" in raw_post else None
+        return PixivFinder.to_post(raw_post)._set_headers(self.configuration.headers) if not "error" in raw_post else None
     
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         comments = []
         
         if (post_id == None):
@@ -112,7 +115,7 @@ class PixivFinder(ISubfinder):
 
         return [PixivFinder.to_comment(comment) for comment in raw_comments]
 
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         return None
@@ -140,7 +143,7 @@ class PixivFinder(ISubfinder):
             raw_posts = self.__client.illust_recommended(offset = 30 * current_page).illusts
             previous_size = len(raw_posts)
 
-            posts += [PixivFinder.to_post(post) for post in raw_posts]
+            posts += [PixivFinder.to_post(post)._set_headers(self.configuration.headers) for post in raw_posts]
 
             if (len(posts) > limit):
                 oversized = True
@@ -164,7 +167,7 @@ class PixivFinder(ISubfinder):
             raw_posts = self.__client.user_recommended(offset = 30 * current_page).user_previews
             previous_size = len(raw_posts)
 
-            posts += [PixivFinder.to_post(post) for post in raw_posts["illusts"]]
+            posts += [PixivFinder.to_post(post)._set_headers(self.configuration.headers) for post in raw_posts["illusts"]]
 
             if (len(posts) > limit):
                 oversized = True
@@ -195,7 +198,7 @@ class PixivFinder(ISubfinder):
             raw_posts = self.__client.search_illust(tags, offset = 30 * current_page).illusts
             previous_length = len(raw_posts)
 
-            posts += [PixivFinder.to_post(post) for post in raw_posts]
+            posts += [PixivFinder.to_post(post)._set_headers(self.configuration.headers) for post in raw_posts]
 
             if (len(posts) > limit):
                 overflowed = True

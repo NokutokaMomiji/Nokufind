@@ -94,7 +94,7 @@ class YandereFinder(ISubfinder):
 
         return post[0] if post else None
     
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         self._check_client()
 
         limit = 100 if limit == None else limit
@@ -102,7 +102,7 @@ class YandereFinder(ISubfinder):
 
         return self._get_comments(post_id, limit, page)
 
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         comment_id = assert_conversion(comment_id, int, "comment_id")
@@ -116,7 +116,7 @@ class YandereFinder(ISubfinder):
     def get_notes(self, post_id: int) -> list[Note]:
         self._check_client()
 
-        post_id = assert_conversion(post_id)
+        post_id = assert_conversion(post_id, int, "post_id")
 
         try:
             raw_notes = self.__client.note_list(post_id = post_id)

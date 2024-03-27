@@ -23,12 +23,15 @@ import os
 import hashlib
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
-import requests
+from concurrent.futures import ThreadPoolExecutor, wait, thread
+import asyncio
 from enum import Enum
 from reprlib import Repr
+from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+from datetime import datetime
 
 from tqdm import tqdm
+from httpx import AsyncClient
 
 from nokufind.Utils import make_request, log, expand
 
@@ -42,7 +45,25 @@ class Rating(int, Enum):
 def _generate_md5(self, images: list[str]):
     log("> [nokufind.Post]: Generating md5 hashes.")
     if (type(images) != list or len(images) == 0):
-        return []
+        self._Post__post_data["md5"] = []
+        return
+    
+    hashes = []
+
+    for image in images:
+        image_request = make_request(image)
+        if (image_request.status_code > 400):
+            hashes.append("")
+            continue
+
+        hashes.append(str(hashlib.md5(image_request.content).hexdigest()))
+
+    self._Post__post_data["md5"] = hashes
+
+async def _generate_md5_async(self, images: list[str]):
+    log("> [nokufind.Post]: Generating md5 hashes.")
+    if (type(images) != list or len(images) == 0):
+        self._Post__post_data["md5"] = []
     
     hashes = []
 
@@ -69,13 +90,48 @@ class Post():
     __max_threads = 10
 
     @staticmethod
-    def set_max_threads(self, num_of_threads: int):
+    def set_max_threads(num_of_threads: int):
         """Sets the maximum number of threads to use when fetching data.
 
         Args:
             num_of_threads (int): The number of max threads.
         """
         Post.__max_threads = num_of_threads if num_of_threads > 0 else Post.__max_threads
+
+    @staticmethod
+    def import_post(file_path_or_data: str | dict) -> Post | None:
+        filepath_type = type(file_path_or_data)
+        data = None
+
+        if filepath_type != str and filepath_type != dict:
+            raise TypeError(f"> [nokufind.Post]: import_post accepts either a path to the data or the data itself, not {filepath_type}.")
+        
+        if filepath_type == str:
+            with open(file_path_or_data, "r", encoding = "utf-8") as f:
+                data = json.load(f)
+        elif filepath_type == dict:
+            data = file_path_or_data
+
+        try:
+            return Post(
+                post_id = data["post_id"],
+                tags = data["tags"],
+                sources = data["sources"],
+                images = data["images"],
+                authors = data["authors"],
+                source = data["source"],
+                preview = data["preview"],
+                md5 = data["md5"],
+                rating = Rating(data["rating"]),
+                parent_id = data["parent_id"],
+                dimensions = [tuple(dim) for dim in data["dimensions"]],
+                poster = data["poster"],
+                poster_id = data["poster_id"],
+                name = data["name"]
+            )
+        except KeyError as e:
+            log(f"> [nokufind.Post]: Post data is invalid. Missing key: {e}")
+            return None
 
     @staticmethod
     def _get_rating(rating_string: str) -> Rating:
@@ -161,10 +217,19 @@ class Post():
         self.__cookies = {}
         self.__data = []
         self.__fetched_data = False
+        self.__inner_executor = None
+        self.__should_cancel = False
 
         # If there is no md5 data, we generate it ourselves.
         if (type(self.__post_data["md5"]) != list or len(self.__post_data["md5"]) == 0 or self.__post_data["md5"][0] == None):
-            threading.Thread(target=lambda: _generate_md5(self, self.__post_data["images"])).start()
+            self.__post_data["md5"] = []
+            threading.Thread(target=lambda: _generate_md5(self, self.__post_data["images"]), daemon = True).start()
+            #try:
+            #    event = asyncio.new_event_loop()
+            #    asyncio.set_event_loop(event)
+            #    asyncio.create_task(_generate_md5_async(self, self.__post_data["images"]))
+            #except:
+            #    threading.Thread(target=lambda: _generate_md5(self, self.__post_data["images"]), daemon = True).start()
 
     def __repr__(self):
         rep = Repr()
@@ -245,54 +310,141 @@ class Post():
         """
         return [self.download_item(path, index = i) for i in range(len(self.images))]
     
-    def fetch_data(self, only_image: bool = False) -> None:
+    def fetch_data(self, only_image: bool = False, *, should_block: bool = True) -> None:
         """Fetches the data of all of the post's images.
 
         Args:
             only_image (``bool``, optional): Whether to only download the main image. Defaults to False.
+            should_block (``bool``, optional): Whether the main thread should be blocked until all data has been fetched. Defaults to True.
         """
         if (self.fetched_data and len(self.data) == len(self.images)):
             return
         
-        session = requests.Session()
+        session = AsyncClient()
 
         if only_image:
             self.__data = [None]
-            self._request_data(self.image, session, 0)
-            self.fetched_data = True
+            self._request_data((0, self.image), session)
+            self.__fetched_data = True
             return
 
         self.__data = [None] * len(self.images)
 
-        url_chunks = [self.images[i:i + Post.__max_threads] for i in range(0, len(self.images), Post.__max_threads)]
+        possible_data = list(enumerate(self.images))
 
-        with ThreadPoolExecutor(Post.__max_threads) as executor:
-            last_index = 0
-            for chunk in url_chunks:
-                executor.map(self._request_data, chunk, [session] * len(chunk), list(range(last_index, len(chunk))))
-                last_index = len(chunk)
+        log(f"> [nokufind.Post]: Main thread {'WILL' if should_block else 'WILL NOT'} be blocked.")
+        
+        executor = ThreadPoolExecutor(Post.__max_threads)
+        self.__inner_executor = executor
+        self.__should_cancel = False
+        
+        for item in executor._threads:
+            item.daemon = True
 
-    
-    def _request_data(self, image_url: str, session: requests.Session, index: int) -> bool:
+        futures = []
+        for url in possible_data:
+            future = executor.submit(self._request_data, url, session)
+            futures.append(future)
+
+        if should_block:
+            wait(futures)
+
+        self.__fetched_data = True
+
+    def cancel_fetch(self):
+        if not self.__inner_executor:
+            return
+        
+        self.__should_cancel = True
+        self.__inner_executor.shutdown(False, cancel_futures = True)
+        self.__inner_executor = None
+
+    def export_post(self, save_path: str, indent: int | None = None) -> bool:
+        try:
+            os.makedirs(save_path, exist_ok = True)
+            
+            final_filepath = os.path.join(save_path, f"{self.source}_{self.post_id}.json")
+
+            with open(final_filepath, "w", encoding = "utf-8") as f:
+                f.write(json.dumps(self.post_dict, indent = indent))
+
+            return True
+        except Exception as e:
+            log(f"> [nokufind.Post]: Failed to export post data for {self.post_id} ({self.source})")
+            log(f"> [nokufind.Post]: Exception: {e}")
+            return False
+        
+    def export_post_with_content(self, save_path: str, indent: int | None = None, compresslevel: int = 9):
+        try:
+            os.makedirs(save_path, exist_ok = True)
+
+            identifier = f"{self.source}_{self.post_id}"
+            today = tuple(datetime.today().timetuple())
+
+            final_filepath = os.path.join(save_path, f"{identifier}.zip")
+
+            self.fetch_data()
+
+            with ZipFile(final_filepath, "w", ZIP_DEFLATED, compresslevel = compresslevel) as f:
+                json_info = ZipInfo(f"{identifier}.json", today)
+                f.writestr(json_info, json.dumps(self.post_dict, indent = indent))
+
+                for i in range(len(self.data)):
+                    data = self.data[i]
+                    filename = self.filenames[i]
+                    data_info = ZipInfo(filename, today)
+
+                    if (data == None):
+                        log(f"> [nokufind.Post]: \"{filename}\" has no loaded data.")
+                        continue
+
+                    f.writestr(data_info, data)
+
+            del self.data
+
+            log(f"> [nokufind.Post]: Saved data and content to {final_filepath}.")
+
+            return True
+        except Exception as e:
+            log(f"> [nokufind.Post]: An exception occurred whilst storing the post data.\n  Exception: {e}")
+            return False
+            
+    def _request_data(self, image_data: tuple[int, str], session: AsyncClient) -> bool:
         """(Internal) Function used for fetching the data.
         ATTENTION! Do not use this function. Use ``fetch_data`` instead.
 
         Args:
-            image_url (``str``): The URL of the image to fetch.
+            image_data (``tuple[int, str]``): A tuple containing the index where to store the downloaded data and the URL of the image to fetch.
             session (``requests.Session``): A Session object used to make the request.
-            index (``int``): The index where to store the downloaded data.
 
         Returns:
             ``bool``: Whether the image data was successfully fetched and stored or not.
         """
-        response = session.get(image_url, headers = self.__headers, cookies = self.__cookies)
+        async def inner_func():
+            if (self.__should_cancel):
+                return False
 
-        if (response.status_code >= 400):
-            log(f"> [nokufind.Post]: [{response.status_code}]: {response.text}")
+            index = image_data[0]
+            image_url = image_data[1]
+
+            response = await session.get(image_url, headers = self.__headers, cookies = self.__cookies, timeout = None)
+
+            if (response.status_code >= 400):
+                log(f"> [nokufind.Post]: [{response.status_code}]: {response.text}")
+                return False
+            
+            log(f"> [nokufind.Post]: Storing image at index {index}...")
+            self.data[index] = response.content
+            return True
+        
+        if (self.__should_cancel):
             return False
         
-        self.data[index] = response.content
-        return True
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        if os.name == 'nt':
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        return loop.run_until_complete(inner_func())
 
     def _set_parent(self, parent_post: Post) -> Post:
         """(Internal) Used by ``post_get_parent`` to store the parent post.
@@ -562,6 +714,12 @@ class Post():
             ``list[bytes]``: List containing raw content data as bytes.
         """
         return self.__data
+    
+    @data.deleter
+    def data(self) -> list[bytes]:
+        del self.__data
+        self.__fetched_data = False
+        self.__data = []
     
     @property
     def fetched_data(self) -> bool:

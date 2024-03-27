@@ -1,4 +1,6 @@
+import requests
 from typing import cast
+from datetime import datetime
 
 from enma import Enma, DefaultAvailableSources, CloudFlareConfig, NHentai, Manga
 from enma.domain.entities.manga import Chapter
@@ -7,6 +9,12 @@ from nokufind import Post, Comment, Note
 from nokufind.Subfinder import ISubfinder, SubfinderConfiguration
 from nokufind.Utils import assert_conversion, get, log, USER_AGENT
 from nokufind.Post import Rating
+
+DATE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+POST_URL = "https://nhentai.net/g"
+API_URL = "https://nhentai.net/api/gallery/%s/comments"
+AVATARS_URL = "https://i5.nhentai.net/"
+RANDOM_URL = "https://nhentai.net/random/"
 
 class NHentaiFinder(ISubfinder):
     @staticmethod
@@ -30,12 +38,21 @@ class NHentaiFinder(ISubfinder):
         )
     
     @staticmethod
-    def to_comment(comment_data) -> Comment:
-        return None
+    def to_comment(comment_data: dict) -> Comment:
+        return Comment(
+            comment_id = comment_data["id"],
+            post_id = comment_data["gallery_id"],
+            creator_id = comment_data["poster"]["id"],
+            creator = comment_data["poster"]["username"],
+            creator_avatar = AVATARS_URL + comment_data["poster"]["avatar_url"],
+            body = comment_data["body"],
+            source = "nhentai",
+            created_at = datetime.fromtimestamp(comment_data["post_date"]),
+        )
     
     @staticmethod
     def to_note(note_data) -> Note:
-        return None
+        raise RuntimeError("NHentai has no notes.")
 
     def __init__(self, cf_clearance: str = "") -> None:
         self.__client = Enma[DefaultAvailableSources]()
@@ -47,6 +64,8 @@ class NHentaiFinder(ISubfinder):
 
         self.__config = SubfinderConfiguration(self.on_client_change)
         self.__config.set_header("Referer", "https://nhentai.net")
+        self.__config.set_header("User-Agent", USER_AGENT)
+        self.__config.set_cookie("cf_clearance", cf_clearance)
 
         self.__name = f"nokufind.Subfinder.{self.__class__.__name__}"
 
@@ -91,13 +110,43 @@ class NHentaiFinder(ISubfinder):
 
         manga = self.__client.get(post_id)
 
-        return NHentaiFinder.to_post(manga)._set_headers(self.configuration.headers) if manga != None else None
+        return NHentaiFinder.to_post(manga)._set_headers(self.configuration.headers)._set_cookies(self.configuration.cookies) if manga != None else None
 
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
-        return super().search_comments(post_id=post_id, limit=limit, page=page)
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
+        if not post_id:
+            request = self._make_request(RANDOM_URL)
+            
+            if not request:
+                return []
 
-    def get_comment(self, comment_id: int) -> Comment | None:
-        return super().get_comment(comment_id)
+            post_id = request.url.split("/")[-2]
+
+        comment_url = (API_URL %(post_id))
+        comment_request = self._make_request(comment_url)
+
+        if not comment_request:
+            return []
+        
+        try:
+            comment_data = comment_request.json()
+        except requests.exceptions.JSONDecodeError as e:
+            log(f"> [{self.__name}]: Invalid response data: {e}")
+        except Exception as e:
+            log(f"> [{self.__name}]: Unexpected exception: {e}")
+
+        return [NHentaiFinder.to_comment(comment) for comment in comment_data]
+
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
+        if not post_id:
+            return None
+
+        comments = self.search_comments(post_id = post_id)
+
+        for comment in comments:
+            if comment.comment_id == comment_id:
+                return comment
+
+        return None
     
     def get_notes(self, post_id: int) -> list[Note]:
         return []
@@ -120,6 +169,15 @@ class NHentaiFinder(ISubfinder):
         if (len(self.__cf_config.cf_clearance) == ""):
             log(f"> [{self.__name}]: This Finder requires a valid cf_clearance cookie.")
             log(f"> [{self.__name}]: Please set the cookie via \"configuration.set_cookie(\"cf_clearance\", [cookie value here])\"")
+
+    def _make_request(self, url) -> requests.Response | None:
+        request = requests.get(url, headers = self.configuration.headers, cookies = self.configuration.cookies)
+        
+        if request.status_code >= 400:
+            log(f"> [{self.__name}]: [{request.status_code}]: {request.text.encode()}")
+            return None
+        
+        return request
 
     @property
     def configuration(self):

@@ -11,7 +11,6 @@
 
     This script relies on built-in Python modules such as json, datetime, and calendar for handling datetimes.
     It also utilizes the markdownify library for converting HTML-like note bodies to Markdown format.
-    
 """
 
 import json

@@ -19,6 +19,7 @@ import io
 import asyncio
 import functools
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait, thread
 from random import shuffle
 
 import httpx
@@ -43,10 +44,15 @@ class Finder():
     A wrapper around multiple booru / image searching APIs that allows you to get posts, comments, notes, etc.
     """
 
+    __max_threads = 10
+
     def __init__(self):
         self.__clients: dict[str, ISubfinder] = {}
         self.__config: SubfinderConfiguration = SubfinderConfiguration()
+        self.__config._set_property("aliases", {})
         self.__name = f"nokufind.Finder"
+        self.__inner_executor = None
+        self.__temp_posts = None
 
     def add_subfinder(self, name: str, subfinder: ISubfinder) -> None:
         """Adds a subfinder to the list of clients to use in subsequent functions.
@@ -60,7 +66,9 @@ class Finder():
         """
         if (not isinstance(subfinder, ISubfinder)):
             raise TypeError("Subfinder must inherit from ISubfinder.")
+        
         self.__clients[name] = subfinder
+        self.__config.get_config("aliases")[name] = {}
 
     def remove_subfinder(self, name: str) -> None:
         """Removes a subfinder.
@@ -104,6 +112,28 @@ class Finder():
         self.add_subfinder("yande.re", YandereFinder())
         self.add_subfinder("gelbooru", GelbooruFinder())
 
+    def set_tag_alias(self, tag: str, alias: str, client: str):
+        """Sets an alias for a tag, for a given client.
+
+        This is useful when multiple sources have different tag names for the same thing.
+
+        For example:
+            rating:safe -> rating:s
+
+        Args:
+            tag (str): The tag that will be aliased.
+            alias (str): The alias for the tag.
+            client (str): The client that the alias will be applied for.
+        """
+        self._check_subfinder_exists(client)
+
+        aliases = self.configuration.get_config("aliases")
+
+        if (client not in aliases.keys()):
+            aliases[client] = {}
+
+        aliases[client][tag] = alias
+
     def search_posts(self, tags: str | list[str] = "", *, limit: int = 100, page: int | None = None, client: str | None = None) -> list[Post]:
         """Searches for posts with the given tags.
 
@@ -116,14 +146,28 @@ class Finder():
         Returns:
             list[Post]: List containing all the found posts.
         """
+        aliases = self.configuration.get_config("aliases")
+
         if type(client) == str:
             self._check_subfinder_exists(client)
-            return self.__clients[client].search_posts(tags = tags, limit = limit, page = page)
+            client_aliases: dict[str, str] = aliases[client]
+            result_tags = tags
+        
+            for tag, alias in client_aliases.items():
+                result_tags = result_tags.replace(tag, alias)
+
+            return self.__clients[client].search_posts(tags = result_tags, limit = limit, page = page)
         
         all_posts: list[Post] = []
 
         for name, subfinder in self.__clients.items():
-            posts = subfinder.search_posts(tags = tags, limit = limit, page = page)
+            result_tags = tags
+            client_aliases = aliases[name]
+
+            for tag, alias in client_aliases.items():
+                result_tags = result_tags.replace(tag, alias)
+
+            posts = subfinder.search_posts(tags = result_tags, limit = limit, page = page)
             if len(posts) == 0:
                 log(f"> [{self.__name}]: Subfinder {name} returned 0 posts.")
             all_posts += posts
@@ -176,7 +220,7 @@ class Finder():
 
         return all_comments
 
-    def get_comment(self, comment_id: int, *, client: str | None = None) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None, *, client: str | None = None) -> Comment | None:
         """Returns a comment with the given ID.
 
         Args:
@@ -188,10 +232,10 @@ class Finder():
         """
         if type(client) == str:
             self._check_subfinder_exists(client)
-            return self.__clients[client].get_comment(comment_id)
+            return self.__clients[client].get_comment(comment_id, post_id)
         
         for subfinder in self.__clients.values():
-            comment = subfinder.get_comment(comment_id)
+            comment = subfinder.get_comment(comment_id, post_id)
             
             if comment != None:
                 return comment
@@ -262,7 +306,36 @@ class Finder():
             all_children += children_post
 
         return all_children
-            
+    
+    async def search_posts_async(self, tags: str | list[str] = "", *, limit: int = 100, page: int | None = None, client: str | None = None) -> list[Post]:
+        if type(client) == str:
+            return self.search_posts(tags, limit = limit, page = page, client = client)
+        
+        aliases = self.configuration.get_config("aliases")
+        all_posts: list[Post] = []
+
+        async def _search(client: tuple[str, ISubfinder]):
+            client_name = client[0]
+            client_subfinder = client[1]
+
+            client_aliases = aliases[client_name]
+
+            result_tags = tags
+
+            for tag, alias in client_aliases.items():
+                result_tags = result_tags.replace(tag, alias)
+
+            if (hasattr(client_subfinder, "search_posts_async")):
+                return await client_subfinder.search_posts_async(result_tags, limit = limit, page = page)
+
+            return client_subfinder.search_posts(result_tags, limit = limit, page = page)
+
+        async with aiometer.amap(_search, self.__clients.items()) as results:
+            async for result in results:
+                all_posts += result
+
+        return all_posts
+
     def download_fast(self, post_list: list[Post], directory: str) -> list[str]:
         """Downloads all of the images in a list of posts to the provided directory.
 
@@ -311,9 +384,91 @@ class Finder():
                 end_paths += result
 
         return end_paths
+    
+    def fetch_data(self, posts: list[Post], only_main_image: bool = False, *, should_block: bool = True) -> None:
+        """Fetches the data from all the posts in the list.
+
+        Args:
+            posts (``list[Post]``): A list containing all the posts to fetch the data for.
+            only_main_image (``bool``, optional): Whether only the data of the main image should be fetched. Defaults to False.
+            should_block (``bool``, optional): Whether the main thread should be blocked until all data has been fetched. Defaults to True.
+        """
+        self.cancel_fetch()
+
+        if (len(posts) == 0):
+            log(f"> {self.__name}: WARNING! Post list was empty. Exiting.")
+            return
+
+        log(f"> {self.__name}: Main thread {'WILL' if should_block else 'WILL NOT'} be blocked.")
+
+        self.__temp_posts = posts.copy()
+        #post_chunks = [posts[i:i + Finder.__max_threads] for i in range(0, len(posts), Finder.__max_threads)]
+
+        #with ThreadPoolExecutor(Finder.__max_threads) as executor:
+        executor = ThreadPoolExecutor(Finder.__max_threads)
+
+        self.__inner_executor = executor
+        
+        futures = []
+        for index, post in enumerate(posts):
+            future = executor.submit(self._fetch_data_post, post, only_main_image, should_block)
+            futures.append(future)
+
+        if should_block:
+            wait(futures)
+
+    def cancel_fetch(self):
+        if (not self.__inner_executor or not self.__temp_posts):
+            return
+        
+        self.__inner_executor.shutdown(False, cancel_futures = True)
+        self.__inner_executor = None
+
+        if (not self.__temp_posts):
+            return
+        
+        for post in self.__temp_posts:
+            post.cancel_fetch()
+
+        del self.__temp_posts
+        self.__temp_posts = None
+
+
+    def filter_by_md5(self, posts: list[Post], generate_md5: bool = False):
+        hash_list = []
+
+        def check(post):
+            if generate_md5 and len(post.md5) == 0:
+                post.generate_md5()
+            
+            if type(post.md5) != list:
+                log(f"> {self.__name}: WARNING! Post has invalid md5 property. {post}")
+                return True
+
+            for md5_hash in post.md5:
+                if md5_hash in hash_list:
+                    return False
+                hash_list.append(md5_hash)
+
+            return True
+        
+        return list(filter(check, posts))
+
+    def _fetch_data_post(self, post: Post, only_main_image: bool, should_block: bool):
+        """(Internal) Function that calls a post's fetch_data method. Used together with the ThreadPoolExecutor.
+        
+        ATTENTION! You should not use this function, use `fetch_data` instead.
+
+        Args:
+            post (``Post``): The post to fetch the data for.
+            only_main_image (``bool``): Whether only the data of the main image should be fetched. Defaults to False.
+            should_block (``bool``): Whether the main thread should be blocked until all data has been fetched. Defaults to True.
+        """
+        post.fetch_data(only_main_image, should_block = should_block)
 
     async def _download_and_safe(self, client: httpx.AsyncClient, directory: str, post: Post) -> list[str]:
         """(Internal) Function for doing the actual downloading. It creates threads for each image in a post.
+        
         ATTENTION! You should not use this function, use ``download_fast`` or ``download_fast_async`` instead.
 
         Args:
@@ -350,7 +505,7 @@ class Finder():
         
         # For each image request, we create a thread to handle storing the file.
         for index, image in enumerate(post.images):
-            response = await client.get(image, timeout = None, headers = self.configuration.headers)
+            response = await client.get(image, timeout = None, headers = post._Post__headers, cookies = post._Post__cookies)
             thread = threading.Thread(target = lambda: store_response(end_paths, directory, post.filenames[index], response))
             threads.append(thread)
             thread.start()
@@ -365,7 +520,7 @@ class Finder():
 
         Args:
             key (str): The key that was changed.
-            value (_type_): The value to which the key was changed to.
+            value (Any): The value to which the key was changed to.
             is_cookie (bool): Whether the key was a request cookie.
             is_header (bool): Whether the key was a request header.
         """

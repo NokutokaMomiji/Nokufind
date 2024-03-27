@@ -287,7 +287,7 @@ class ISubfinder(ABC):
         ...
 
     @abstractmethod
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         """Searches for a comment with the given ID.
 
         Args:

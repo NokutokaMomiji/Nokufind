@@ -106,6 +106,9 @@ class KonachanFinder(ISubfinder):
         self.__config._set_property("password", password)
         self.__config._set_property("hash_string", hash_string)
 
+        self.__retries = 0
+        self.__MAX_RETRIES = 10
+
         self.__name = f"nokufind.Subfinder.{self.__class__.__name__}"
         log(f"> [{self.__name}]: Initialized a new {self.__class__.__name__} instance.")
 
@@ -126,14 +129,22 @@ class KonachanFinder(ISubfinder):
         try:
             post = self.search_posts(f"id:{post_id}")
         except PybooruHTTPError as e:
+            log(f"> [{self.__name}]: Pybooru raised an HTTP Error. Retrying.\n{e}")
             sleep(2)
+            
+            if (self.__retries >= self.__MAX_RETRIES):
+                log(f"> [{self.__name}]: Exceded max retries.")
+                self.__retries = 0
+                return None
+            
+            self.__retries += 1
             return self.get_post(post_id)
         except Exception as e:
             log(f"> [{self.__name}]: Failed to get post id {post_id}.\nException: {e}")
 
         return post[0] if post else None
     
-    def search_comments(self, *, post_id=None, limit=None, page=None) -> list[Comment]:
+    def search_comments(self, *, post_id: int | None = None, limit: int | None = None, page: int | None = None) -> list[Comment]:
         self._check_client()
 
         limit = 100 if limit == None else limit
@@ -141,7 +152,7 @@ class KonachanFinder(ISubfinder):
 
         return self._get_comments(post_id, limit, page)
 
-    def get_comment(self, comment_id: int) -> Comment | None:
+    def get_comment(self, comment_id: int, post_id: int | None = None) -> Comment | None:
         self._check_client()
 
         comment_id = assert_conversion(comment_id, int, "comment_id")
@@ -155,7 +166,7 @@ class KonachanFinder(ISubfinder):
     def get_notes(self, post_id: int) -> list[Note]:
         self._check_client()
 
-        post_id = assert_conversion(post_id)
+        post_id = assert_conversion(post_id, int, "post_id")
 
         try:
             raw_notes = self.__client.note_list(post_id = post_id)
@@ -262,8 +273,16 @@ class KonachanFinder(ISubfinder):
                 if "410" in e._msg:
                     break
                 else:
-                    sleep(0.1)
+                    sleep(1)
+
+                    if (self.__retries >= self.__MAX_RETRIES):
+                        log(f"> [{self.__name}]: Max retries exceeded. Returning found posts.")
+                        self.__retries = 0
+                        break
+                    
+                    self.__retries += 1
                     continue
+                
             previous_size = len(raw_posts)
 
             all_posts += raw_posts
