@@ -173,11 +173,11 @@ class DanbooruFinder(ISubfinder):
 
         for combination in total_combinations:
             tag_string = " ".join(combination)
-            log(f"> [{tag_string}]: \"{tag_string}\".")
+            log(f"> [{self.__name}]: \"{tag_string}\".")
 
             current_posts = self._get_all_posts(tag_string, limit, page)
 
-            if (len(current_posts)):
+            if (not len(current_posts)):
                 log(f"> [{self.__name}]: No posts found.")
                 return []
             
